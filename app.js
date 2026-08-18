@@ -95,7 +95,151 @@ async function uploadPhotoToServer(storeKey, auditId, itemId, photoKey, dataUrl,
   }
 }
 
-// ── Exportar / Importar respaldo en JSON (para mover datos entre dispositivos) ──
+// ── Importar auditoría desde el .xlsx exportado por esta misma app ──
+function normText(s) {
+  return String(s == null ? '' : s).trim().split(/\s+/).join(' ');
+}
+
+let _itemIndexCache = null;
+function buildItemIndex() {
+  if (_itemIndexCache) return _itemIndexCache;
+  const idx = new Map();
+  BSA_TEMPLATE.sectionOrder.forEach(skey => {
+    const sec = BSA_TEMPLATE.sections[skey];
+    Object.keys(sec.subsections).forEach(subKey => {
+      const sub = sec.subsections[subKey];
+      Object.keys(sub.groups).forEach(gKey => {
+        const label = subKey !== '_default' ? `${subKey} — ${gKey}` : gKey;
+        sub.groups[gKey].forEach(it => {
+          idx.set(normText(label) + '||' + normText(it.text), { id: it.id, max: it.max });
+        });
+      });
+    });
+  });
+  _itemIndexCache = idx;
+  return idx;
+}
+
+async function readZipEntries(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+  const bytes = new Uint8Array(arrayBuffer);
+  const entries = {};
+  let offset = 0;
+  while (offset + 4 <= bytes.length && view.getUint32(offset, true) === 0x04034b50) {
+    const method = view.getUint16(offset + 8, true);
+    const compSize = view.getUint32(offset + 18, true);
+    const nameLen = view.getUint16(offset + 26, true);
+    const extraLen = view.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const name = new TextDecoder('utf-8').decode(bytes.subarray(nameStart, nameStart + nameLen));
+    const dataStart = nameStart + nameLen + extraLen;
+    const compData = bytes.subarray(dataStart, dataStart + compSize);
+    if (method === 0) {
+      entries[name] = compData;
+    } else if (method === 8 && typeof DecompressionStream !== 'undefined') {
+      const stream = new Blob([compData]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      entries[name] = new Uint8Array(await new Response(stream).arrayBuffer());
+    } else {
+      entries[name] = null;
+    }
+    offset = dataStart + compSize;
+  }
+  return entries;
+}
+
+function cellRefCol(ref) {
+  const m = /^([A-Z]+)\d+$/.exec(ref || '');
+  return m ? m[1] : null;
+}
+
+function cellText(cellEl, sharedStrings) {
+  if (!cellEl) return null;
+  const type = cellEl.getAttribute('t');
+  if (type === 'inlineStr') {
+    const t = cellEl.querySelector('is t');
+    return t ? t.textContent : '';
+  }
+  if (type === 's') {
+    const v = cellEl.querySelector('v');
+    const i = v ? parseInt(v.textContent, 10) : -1;
+    return (sharedStrings && sharedStrings[i]) || '';
+  }
+  const v = cellEl.querySelector('v');
+  return v ? v.textContent : null;
+}
+
+async function parseAuditExcel(file) {
+  const buf = await file.arrayBuffer();
+  const entries = await readZipEntries(buf);
+  const sheetName = Object.keys(entries).find(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n));
+  if (!sheetName || !entries[sheetName]) throw new Error('No se encontró una hoja de cálculo válida en el archivo.');
+
+  let sharedStrings = null;
+  if (entries['xl/sharedStrings.xml']) {
+    const ssXml = new TextDecoder('utf-8').decode(entries['xl/sharedStrings.xml']);
+    const ssDoc = new DOMParser().parseFromString(ssXml, 'application/xml');
+    sharedStrings = Array.from(ssDoc.querySelectorAll('si')).map(si =>
+      Array.from(si.querySelectorAll('t')).map(t => t.textContent).join('')
+    );
+  }
+
+  const sheetXml = new TextDecoder('utf-8').decode(entries[sheetName]);
+  const doc = new DOMParser().parseFromString(sheetXml, 'application/xml');
+  const rows = Array.from(doc.querySelectorAll('row'));
+  if (!rows.length) throw new Error('El archivo no tiene filas.');
+
+  function getCol(row, col) {
+    const cells = Array.from(row.querySelectorAll('c'));
+    const cell = cells.find(c => cellRefCol(c.getAttribute('r')) === col);
+    return cellText(cell, sharedStrings);
+  }
+
+  const title = getCol(rows[0], 'A') || '';
+  const store = STORES.find(s => title.includes(s.name));
+  if (!store) throw new Error('No se pudo identificar la tienda desde el archivo (¿es un consolidado?). Usa un archivo exportado desde el resumen de una auditoría individual.');
+
+  const fechaTxt = getCol(rows[1], 'B');
+  const auditor = getCol(rows[1], 'D') || '';
+  const gerente = getCol(rows[2], 'B') || '';
+  if (!fechaTxt) throw new Error('No se encontró la fecha de la auditoría en el archivo.');
+  const [dd, mm, yyyy] = fechaTxt.split('/');
+  const fechaIso = `${yyyy}-${mm}-${dd}`;
+
+  const itemIndex = buildItemIndex();
+  const responses = {};
+  let matched = 0;
+  rows.forEach(row => {
+    const a = getCol(row, 'A');
+    const b = getCol(row, 'B');
+    const c = getCol(row, 'C');
+    const d = getCol(row, 'D');
+    if (!a || !b || !c) return;
+    if (b === 'Ítem') return;
+    const key = normText(a) + '||' + normText(b);
+    const info = itemIndex.get(key);
+    if (!info) return;
+    let state = null;
+    if (c.indexOf('Cumple') === 0) state = 'ok';
+    else if (c.indexOf('No cumple') === 0) state = 'bad';
+    else if (c === 'No aplica') state = 'na';
+    else return;
+    responses[info.id] = { state, obs: d || '', hasPhoto: false };
+    matched++;
+  });
+  if (matched === 0) throw new Error('No se pudo leer ningún ítem del archivo. ¿Es un archivo exportado desde esta app?');
+
+  return {
+    id: store.key + '_xlsx_' + Date.now(),
+    store: store.key,
+    fecha: fechaIso,
+    auditor,
+    gerente,
+    responses,
+    synced: false,
+  };
+}
+
+// ── Exportar / Importar respaldo en JSON o Excel (para mover datos entre dispositivos) ──
 function exportDataJson() {
   const audits = [];
   STORES.forEach(s => getAudits(s.key).forEach(a => audits.push(a)));
@@ -114,9 +258,15 @@ function exportDataJson() {
 async function importDataJson(file, onDone) {
   if (!file) return;
   try {
-    const text = await file.text();
-    const data = JSON.parse(text);
-    const importedAudits = Array.isArray(data.audits) ? data.audits : [];
+    const isXlsx = /\.xlsx$/i.test(file.name);
+    let importedAudits;
+    if (isXlsx) {
+      importedAudits = [await parseAuditExcel(file)];
+    } else {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      importedAudits = Array.isArray(data.audits) ? data.audits : [];
+    }
     if (!importedAudits.length) { toast('⚠️ El archivo no tiene auditorías'); return; }
     let count = 0;
     STORES.forEach(s => {
@@ -133,7 +283,7 @@ async function importDataJson(file, onDone) {
     await syncPushPending();
     if (onDone) onDone();
   } catch (e) {
-    toast('❌ Archivo inválido');
+    toast('❌ ' + (e && e.message ? e.message : 'Archivo inválido'));
   }
 }
 
@@ -490,9 +640,9 @@ async function openStoreHome(storeKey) {
   const btnImport = document.createElement('button');
   btnImport.className = 'btn-ghost';
   btnImport.style.marginTop = '10px';
-  btnImport.textContent = '⬆️ Importar datos';
+  btnImport.textContent = '⬆️ Importar datos (.json o .xlsx)';
   const importInput = document.createElement('input');
-  importInput.type = 'file'; importInput.accept = 'application/json'; importInput.style.display = 'none';
+  importInput.type = 'file'; importInput.accept = 'application/json,.json,.xlsx'; importInput.style.display = 'none';
   btnImport.addEventListener('click', () => importInput.click());
   importInput.addEventListener('change', () => importDataJson(importInput.files[0], () => openStoreHome(storeKey)));
   body.appendChild(btnImport);
