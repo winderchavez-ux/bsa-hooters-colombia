@@ -305,7 +305,7 @@ const DEFAULT_PASSWORDS = {
   salitre: 'salitre2026',
   zonat: 'zonat2026',
   medellin: 'medellin2026',
-  gerencia: 'gerencia2026',
+  gerencia: 'violeta0324',
 };
 function getPasswords() {
   try { return { ...DEFAULT_PASSWORDS, ...JSON.parse(localStorage.getItem('bsa_passwords') || '{}') }; }
@@ -552,6 +552,214 @@ async function renderStoreGrid() {
   });
 }
 $('btn-consolidado').addEventListener('click', () => renderConsolidado());
+
+// ============================================================
+//  RESUMEN EJECUTIVO (áreas de mejora por tienda) — vista DO
+// ============================================================
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function buildFindingsList(responses) {
+  const findings = [];
+  BSA_TEMPLATE.sectionOrder.forEach(skey => {
+    const sec = BSA_TEMPLATE.sections[skey];
+    Object.keys(sec.subsections).forEach(subKey => {
+      const sub = sec.subsections[subKey];
+      Object.keys(sub.groups).forEach(gKey => {
+        sub.groups[gKey].forEach(it => {
+          const r = responses[it.id];
+          if (r && r.state === 'bad') findings.push({ section: sec.label, text: it.text, obs: r.obs || '' });
+        });
+      });
+    });
+  });
+  return findings;
+}
+
+function computeResumenData() {
+  return STORES.map(s => {
+    const latest = getLatestAudit(s.key);
+    if (!latest) return { store: s, latest: null };
+    const scores = computeScores(latest.responses);
+    const { badCount } = countAnswered(latest.responses);
+    const sectionsSorted = BSA_TEMPLATE.sectionOrder
+      .map(skey => scores.sections[skey])
+      .filter(sec => sec.pct !== null)
+      .sort((a, b) => a.pct - b.pct);
+    const worst = sectionsSorted[0] || null;
+    const findings = buildFindingsList(latest.responses);
+    return { store: s, latest, scores, badCount, worst, findings };
+  });
+}
+
+function buildResumenEjecutivoHtml(data) {
+  const cards = data.map(d => {
+    if (!d.latest) {
+      return `<div class="card"><div class="card-head"><h2>${d.store.icon} ${esc(d.store.name)}</h2></div><p class="muted">Sin auditorías registradas</p></div>`;
+    }
+    const pct = d.scores.overall;
+    const scls = pct === null ? '' : pct >= 90 ? 'good' : pct >= 75 ? 'warn' : 'bad';
+    const sectionRows = BSA_TEMPLATE.sectionOrder.map(skey => {
+      const sec = d.scores.sections[skey];
+      return `<tr><td>${esc(sec.label)}</td><td>${sec.pct !== null ? sec.pct.toFixed(1) + '%' : '—'}</td></tr>`;
+    }).join('');
+    const findingsHtml = d.findings.slice(0, 10).map(f =>
+      `<li><b>${esc(f.section)}:</b> ${esc(f.text)}${f.obs ? ` <span class="obs">— "${esc(f.obs)}"</span>` : ''}</li>`
+    ).join('') || '<li class="muted">Sin hallazgos pendientes 🎉</li>';
+    const moreNote = d.findings.length > 10 ? `<p class="muted">+${d.findings.length - 10} hallazgo(s) más</p>` : '';
+    return `
+    <div class="card">
+      <div class="card-head">
+        <h2>${d.store.icon} ${esc(d.store.name)}</h2>
+        <div class="score ${scls}">${pct !== null ? pct.toFixed(1) + '%' : '—'}</div>
+      </div>
+      <p class="meta">Auditado el ${fmtDate(d.latest.fecha)} por ${esc(d.latest.auditor || '—')} · ${d.badCount} hallazgo(s) abierto(s)</p>
+      ${d.worst ? `<div class="worst">⚠️ Área de mayor oportunidad: <b>${esc(d.worst.label)}</b> (${d.worst.pct.toFixed(1)}%)</div>` : ''}
+      <table class="sections">${sectionRows}</table>
+      <h3>Principales hallazgos a corregir</h3>
+      <ul class="findings">${findingsHtml}</ul>
+      ${moreNote}
+    </div>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8">
+<title>Resumen Ejecutivo BSA</title>
+<style>
+  body { font-family: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:#f7f7f8; color:#1a1a1a; margin:0; padding:32px 16px; }
+  h1 { text-align:center; margin-bottom:4px; }
+  .sub { text-align:center; color:#767676; margin-bottom:32px; }
+  .wrap { max-width:760px; margin:0 auto; display:flex; flex-direction:column; gap:20px; }
+  .card { background:#fff; border-radius:16px; padding:22px 24px; box-shadow:0 2px 10px rgba(0,0,0,0.08); }
+  .card-head { display:flex; align-items:center; justify-content:space-between; }
+  .card-head h2 { margin:0; font-size:19px; }
+  .score { font-size:28px; font-weight:800; }
+  .score.good { color:#2fb344; } .score.warn { color:#cc7a1a; } .score.bad { color:#e5484d; }
+  .meta { color:#767676; font-size:13px; margin:6px 0 10px; }
+  .worst { background:#fdece1; border:1px solid #ff6000; color:#a34600; border-radius:10px; padding:10px 14px; font-size:13.5px; margin-bottom:14px; }
+  table.sections { width:100%; border-collapse:collapse; margin-bottom:16px; }
+  table.sections td { padding:5px 6px; font-size:13px; border-bottom:1px solid #eee; }
+  table.sections td:last-child { text-align:right; font-weight:700; }
+  h3 { font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:#767676; margin:0 0 8px; }
+  ul.findings { margin:0; padding-left:18px; font-size:13.5px; line-height:1.6; }
+  ul.findings .obs { color:#767676; font-style:italic; }
+  .muted { color:#999; font-size:13px; }
+  @media print { body { background:#fff; } .card { box-shadow:none; border:1px solid #ddd; } }
+</style>
+</head><body>
+<h1>🦉 Resumen Ejecutivo BSA — Hooters Colombia</h1>
+<div class="sub">Generado el ${new Date().toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
+<div class="wrap">${cards}</div>
+</body></html>`;
+}
+
+function downloadResumenEjecutivoHtml(data) {
+  const html = buildResumenEjecutivoHtml(data);
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `Resumen_Ejecutivo_BSA_${new Date().toISOString().slice(0, 10)}.html`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+async function renderResumenEjecutivo() {
+  if (syncConfigured()) { toast('🔄 Sincronizando...'); await syncPullAll(); }
+  const data = computeResumenData();
+  const body = $('resumen-body');
+  body.innerHTML = '';
+
+  const btnDownload = document.createElement('button');
+  btnDownload.className = 'btn-primary btn-block';
+  btnDownload.textContent = '⬇️ Descargar Resumen Ejecutivo (HTML)';
+  btnDownload.addEventListener('click', () => downloadResumenEjecutivoHtml(computeResumenData()));
+  body.appendChild(btnDownload);
+
+  data.forEach(d => {
+    const card = document.createElement('div');
+    card.className = 'home-hero';
+    card.style.marginTop = '16px';
+
+    if (!d.latest) {
+      card.innerHTML = `<div class="hero-label">${d.store.icon} ${d.store.name}</div><div class="empty-note" style="padding:10px 0">Sin auditorías registradas</div>`;
+      body.appendChild(card);
+      return;
+    }
+
+    const findingsHtml = d.findings.slice(0, 5).map(f => `
+      <div class="issue-card" style="margin-bottom:6px">
+        <div class="ic-section">${esc(f.section)}</div>
+        <div class="ic-text">${esc(f.text)}</div>
+        ${f.obs ? `<div class="ic-obs">"${esc(f.obs)}"</div>` : ''}
+      </div>
+    `).join('');
+    const moreNote = d.findings.length > 5 ? `<div class="empty-note" style="padding:6px 0">+${d.findings.length - 5} hallazgo(s) más</div>` : '';
+
+    card.innerHTML = `
+      <div class="hero-label">${d.store.icon} ${d.store.name}</div>
+      <div class="hero-score ${scoreClass(d.scores.overall)}">${d.scores.overall !== null ? d.scores.overall.toFixed(1) + '%' : '—'}</div>
+      <div class="hero-date">Auditado el ${fmtDate(d.latest.fecha)} por ${d.latest.auditor || '—'} · ${d.badCount} hallazgo(s)</div>
+      ${d.worst ? `<div style="margin-top:10px;padding:10px 12px;background:rgba(229,72,77,0.1);border:1px solid var(--bad);border-radius:10px;font-size:13px"><b>Área de mayor oportunidad:</b> ${esc(d.worst.label)} (${d.worst.pct.toFixed(1)}%)</div>` : ''}
+      <div class="history-title" style="margin-top:16px">Principales hallazgos a corregir</div>
+      ${d.findings.length ? findingsHtml + moreNote : '<div class="empty-note">🎉 Sin hallazgos pendientes</div>'}
+    `;
+    const btnView = document.createElement('button');
+    btnView.className = 'btn-secondary';
+    btnView.style.marginTop = '10px';
+    btnView.textContent = 'Ver auditoría completa →';
+    btnView.addEventListener('click', () => viewAuditSummary(d.store.key, d.latest.id));
+    card.appendChild(btnView);
+
+    body.appendChild(card);
+  });
+
+  show('screen-resumen');
+}
+$('btn-resumen-ejecutivo').addEventListener('click', () => renderResumenEjecutivo());
+$('btn-resumen-back').addEventListener('click', () => { renderStoreGrid(); show('screen-select'); });
+
+// ── Envío automático de correo con el resumen ejecutivo al guardar una auditoría ──
+async function sendExecutiveSummaryEmail(storeKey, audit) {
+  if (!syncConfigured()) return;
+  try {
+    const s = STORE_MAP[storeKey];
+    const scores = computeScores(audit.responses);
+    const { badCount } = countAnswered(audit.responses);
+    const sectionsSorted = BSA_TEMPLATE.sectionOrder
+      .map(skey => scores.sections[skey])
+      .filter(sec => sec.pct !== null)
+      .sort((a, b) => a.pct - b.pct);
+    const worst = sectionsSorted[0] || null;
+    const findings = buildFindingsList(audit.responses);
+
+    const sectionRows = BSA_TEMPLATE.sectionOrder.map(skey => {
+      const sec = scores.sections[skey];
+      return `<tr><td style="padding:4px 8px">${esc(sec.label)}</td><td style="padding:4px 8px;text-align:right">${sec.pct !== null ? sec.pct.toFixed(1) + '%' : '—'}</td></tr>`;
+    }).join('');
+    const findingsHtml = findings.slice(0, 10).map(f =>
+      `<li><b>${esc(f.section)}:</b> ${esc(f.text)}${f.obs ? ' — <i>' + esc(f.obs) + '</i>' : ''}</li>`
+    ).join('') || '<li>Sin hallazgos pendientes 🎉</li>';
+
+    const overallTxt = scores.overall !== null ? scores.overall.toFixed(1) + '%' : '—';
+    const htmlBody = `
+      <h2>BSA ${esc(s.name)} — ${fmtDate(audit.fecha)}</h2>
+      <p><b>Puntaje general:</b> ${overallTxt}<br>
+      <b>Auditor:</b> ${esc(audit.auditor || '—')} · <b>Gerente:</b> ${esc(audit.gerente || '—')}<br>
+      <b>Hallazgos abiertos:</b> ${badCount}</p>
+      ${worst ? `<p style="background:#fdece1;padding:10px;border-radius:8px"><b>Área de mayor oportunidad:</b> ${esc(worst.label)} (${worst.pct.toFixed(1)}%)</p>` : ''}
+      <table>${sectionRows}</table>
+      <h3>Principales hallazgos a corregir</h3>
+      <ul>${findingsHtml}</ul>
+      <p><a href="https://winderchavez-ux.github.io/bsa-hooters-colombia/">Ver el detalle completo en la app →</a></p>
+    `;
+    await apiPost('sendSummaryEmail', {
+      subject: `BSA ${s.name} — ${fmtDate(audit.fecha)} — ${overallTxt}`,
+      htmlBody,
+    });
+  } catch (e) { /* el correo es best-effort, no debe romper el guardado */ }
+}
+
 $('btn-export-data-select').addEventListener('click', () => exportDataJson());
 $('btn-import-data-select').addEventListener('click', () => $('input-import-select').click());
 $('input-import-select').addEventListener('change', () => {
@@ -989,8 +1197,12 @@ async function doSaveAudit() {
   viewAuditSummary(draftAudit.store, draftAudit.id);
   if (syncConfigured()) {
     const res = await apiPost('saveAudit', { audit: toSave });
-    if (res && res.ok) markAuditSynced(draftAudit.store, draftAudit.id);
-    else toast('⚠️ Sin conexión: se sincronizará más tarde');
+    if (res && res.ok) {
+      markAuditSynced(draftAudit.store, draftAudit.id);
+      sendExecutiveSummaryEmail(draftAudit.store, toSave);
+    } else {
+      toast('⚠️ Sin conexión: se sincronizará más tarde');
+    }
   }
 }
 $('btn-audit-save').addEventListener('click', doSaveAudit);

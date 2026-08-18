@@ -43,6 +43,7 @@
     <div class="store-grid" id="store-grid"></div>
 
     <button class="btn-ghost" id="btn-consolidado">📊 Ver consolidado de las 3 tiendas</button>
+    <button class="btn-ghost" id="btn-resumen-ejecutivo" style="margin-top:10px">📈 Resumen Ejecutivo (áreas de mejora)</button>
     <button class="btn-ghost" id="btn-export-data-select" style="margin-top:10px">⬇️ Exportar datos (respaldo)</button>
     <button class="btn-ghost" id="btn-import-data-select" style="margin-top:10px">⬆️ Importar datos (.json o .xlsx)</button>
     <input type="file" id="input-import-select" accept="application/json,.json,.xlsx" style="display:none">
@@ -102,6 +103,16 @@
     <div style="width:36px"></div>
   </header>
   <div class="page-body" id="summary-body"></div>
+</div>
+
+<!-- ══════════════ SCREEN: RESUMEN EJECUTIVO ══════════════ -->
+<div id="screen-resumen" class="screen">
+  <header class="topbar">
+    <button class="btn-icon" id="btn-resumen-back">←</button>
+    <div class="topbar-title">Resumen Ejecutivo</div>
+    <div style="width:36px"></div>
+  </header>
+  <div class="page-body" id="resumen-body"></div>
 </div>
 
 <!-- ══════════════ SCREEN: CONSOLIDADO ══════════════ -->
