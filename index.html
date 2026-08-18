@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>BSA Hooters Colombia</title>
+<meta name="description" content="Auditoría de Estándares de Marca (BSA) — Hooters Colombia">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="assets/logo.png">
+</head>
+<body>
+
+<!-- ══════════════ SCREEN: LOGIN ══════════════ -->
+<div id="screen-login" class="screen active">
+  <div class="select-wrap">
+    <img src="assets/logo.png" alt="Hooters" class="select-logo">
+    <h1 class="select-title">BSA Hooters Colombia</h1>
+    <div class="select-sub">Auditoría de Estándares de Marca</div>
+
+    <form id="login-form" class="login-form">
+      <label class="field-label">Selecciona tu acceso</label>
+      <div class="area-grid" id="area-grid"></div>
+
+      <label class="field-label">Contraseña</label>
+      <div class="password-wrapper">
+        <input type="password" id="login-password" class="login-input" placeholder="Ingresa tu contraseña" autocomplete="current-password">
+        <button type="button" class="toggle-pw" id="toggle-pw">👁️</button>
+      </div>
+
+      <button type="submit" class="btn-primary btn-block" style="margin-top:14px">Ingresar</button>
+      <div class="login-error" id="login-error"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ══════════════ SCREEN: SELECCIÓN DE TIENDA ══════════════ -->
+<div id="screen-select" class="screen">
+  <div class="select-wrap">
+    <img src="assets/logo.png" alt="Hooters" class="select-logo">
+    <h1 class="select-title">BSA Hooters Colombia</h1>
+    <div class="select-sub">Auditoría de Estándares de Marca</div>
+
+    <div class="store-grid" id="store-grid"></div>
+
+    <button class="btn-ghost" id="btn-consolidado">📊 Ver consolidado de las 3 tiendas</button>
+    <button class="btn-ghost" id="btn-export-data-select" style="margin-top:10px">⬇️ Exportar datos (respaldo)</button>
+    <button class="btn-ghost" id="btn-import-data-select" style="margin-top:10px">⬆️ Importar datos</button>
+    <input type="file" id="input-import-select" accept="application/json" style="display:none">
+    <button class="btn-ghost" id="btn-reset-data" style="color:#e5484d;border-color:#e5484d;margin-top:10px">🗑️ Borrar todas las auditorías y fotos</button>
+    <button class="btn-ghost" id="btn-logout-select" style="margin-top:10px">🚪 Cerrar sesión</button>
+
+    <details class="settings-details">
+      <summary>🔒 Cambiar contraseñas de acceso</summary>
+      <div class="login-form" style="margin-top:12px">
+        <label class="field-label">Área</label>
+        <select id="pw-area" class="login-input">
+          <option value="salitre">🦉 Hooters Salitre</option>
+          <option value="zonat">🦉 Hooters Zona T</option>
+          <option value="medellin">🦉 Hooters Medellín</option>
+          <option value="gerencia">👔 DO Operación</option>
+        </select>
+        <label class="field-label">Nueva contraseña</label>
+        <input type="password" id="pw-new" class="login-input" placeholder="Mínimo 6 caracteres">
+        <button type="button" class="btn-secondary" id="btn-save-pw" style="margin-top:10px">💾 Guardar contraseña</button>
+      </div>
+    </details>
+  </div>
+</div>
+
+<!-- ══════════════ SCREEN: PANEL DE TIENDA ══════════════ -->
+<div id="screen-home" class="screen">
+  <header class="topbar">
+    <button class="btn-icon" id="btn-home-back">←</button>
+    <div class="topbar-title" id="home-store-name">Tienda</div>
+    <div style="width:36px"></div>
+  </header>
+  <div class="page-body" id="home-body"></div>
+</div>
+
+<!-- ══════════════ SCREEN: AUDITORÍA EN CURSO ══════════════ -->
+<div id="screen-audit" class="screen">
+  <header class="topbar">
+    <button class="btn-icon" id="btn-audit-exit">←</button>
+    <div class="topbar-title" id="audit-store-name">Auditoría</div>
+    <button class="btn-icon" id="btn-audit-save-top">💾</button>
+  </header>
+  <div class="audit-progress-bar">
+    <div class="audit-progress-fill" id="audit-progress-fill"></div>
+  </div>
+  <div class="audit-score-strip" id="audit-score-strip"></div>
+  <div class="page-body" id="audit-body"></div>
+  <div class="audit-footer">
+    <button class="btn-primary btn-block" id="btn-audit-save">💾 Guardar Auditoría</button>
+  </div>
+</div>
+
+<!-- ══════════════ SCREEN: RESUMEN DE AUDITORÍA ══════════════ -->
+<div id="screen-summary" class="screen">
+  <header class="topbar">
+    <button class="btn-icon" id="btn-summary-back">←</button>
+    <div class="topbar-title">Resumen de Auditoría</div>
+    <div style="width:36px"></div>
+  </header>
+  <div class="page-body" id="summary-body"></div>
+</div>
+
+<!-- ══════════════ SCREEN: CONSOLIDADO ══════════════ -->
+<div id="screen-consolidado" class="screen">
+  <header class="topbar">
+    <button class="btn-icon" id="btn-consolidado-back">←</button>
+    <div class="topbar-title">Consolidado Colombia</div>
+    <div style="width:36px"></div>
+  </header>
+  <div class="page-body" id="consolidado-body"></div>
+</div>
+
+<!-- Lightbox de fotos -->
+<div id="lightbox" class="lightbox">
+  <img id="lightbox-img" src="">
+  <button class="lightbox-close" id="lightbox-close">✕</button>
+</div>
+
+<div id="toast-container"></div>
+
+<script src="checklist-data.js"></script>
+<script src="xlsx-writer.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
