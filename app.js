@@ -1111,8 +1111,28 @@ $('btn-summary-back').addEventListener('click', () => openStoreHome(summaryCtx.s
 // ============================================================
 function cell(v, s) { return { v, s: s || STYLE_DEFAULT }; }
 
-function auditToRows(storeName, a, scores) {
+async function resolvePhotoDataUrl(auditId, itemId, photoUrl) {
+  const local = await photoGet(auditId + '::' + itemId);
+  if (local) return local;
+  if (!photoUrl) return null;
+  try {
+    const res = await fetch(photoUrl);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    return null; // probablemente bloqueado por CORS al leer desde otro origen
+  }
+}
+
+async function auditToRows(storeName, a, scores) {
   const rows = [];
+  const images = [];
   rows.push([cell(`BSA — ${storeName}`, STYLE_TITLE), null, null, null, null]);
   rows.push([cell('Fecha', STYLE_SUBTOTAL), cell(fmtDate(a.fecha)), cell('Auditor', STYLE_SUBTOTAL), cell(a.auditor || '—'), null]);
   rows.push([cell('Gerente', STYLE_SUBTOTAL), cell(a.gerente || '—'), null, null, null]);
@@ -1135,35 +1155,45 @@ function auditToRows(storeName, a, scores) {
   ]);
   rows.push([]);
 
-  BSA_TEMPLATE.sectionOrder.forEach(skey => {
+  for (const skey of BSA_TEMPLATE.sectionOrder) {
     const sec = BSA_TEMPLATE.sections[skey];
     rows.push([cell(sec.label, STYLE_TITLE), null, null, null, null]);
-    rows.push([cell('Grupo', STYLE_HEAD), cell('Ítem', STYLE_HEAD), cell('Estado / Puntos', STYLE_HEAD), cell('Observación', STYLE_HEAD), null]);
-    Object.keys(sec.subsections).forEach(subKey => {
+    rows.push([cell('Grupo', STYLE_HEAD), cell('Ítem', STYLE_HEAD), cell('Estado / Puntos', STYLE_HEAD), cell('Observación', STYLE_HEAD), cell('Foto', STYLE_HEAD)]);
+    for (const subKey of Object.keys(sec.subsections)) {
       const sub = sec.subsections[subKey];
-      Object.keys(sub.groups).forEach(gKey => {
-        sub.groups[gKey].forEach(it => {
+      for (const gKey of Object.keys(sub.groups)) {
+        for (const it of sub.groups[gKey]) {
           const r = a.responses[it.id] || {};
           let estado = 'Sin evaluar', style = STYLE_DEFAULT;
           if (r.state === 'ok') { estado = `Cumple (${it.max}/${it.max})`; style = STYLE_OK; }
           else if (r.state === 'bad') { estado = `No cumple (0/${it.max})`; style = STYLE_BAD; }
           else if (r.state === 'na') { estado = 'No aplica'; }
           const label = subKey !== '_default' ? `${subKey} — ${gKey}` : gKey;
-          rows.push([cell(label, style), cell(it.text, style), cell(estado, style), cell(r.obs || '', style), null]);
-        });
-      });
-    });
-  });
-  return rows;
+          let photoCell = null;
+          if (r.state === 'bad' && (r.hasPhoto || r.photoUrl)) {
+            const dataUrl = await resolvePhotoDataUrl(a.id, it.id, r.photoUrl);
+            if (dataUrl) {
+              images.push({ row: rows.length, col: 4, dataUrl });
+            } else if (r.photoUrl) {
+              photoCell = cell(r.photoUrl, style);
+            }
+          }
+          rows.push([cell(label, style), cell(it.text, style), cell(estado, style), cell(r.obs || '', style), photoCell]);
+        }
+      }
+    }
+  }
+  return { rows, images };
 }
 
-function exportAuditExcel(storeKey, auditId) {
+async function exportAuditExcel(storeKey, auditId) {
   const a = getAudits(storeKey).find(x => x.id === auditId);
   if (!a) return;
   const scores = computeScores(a.responses);
   const s = STORE_MAP[storeKey];
-  const rows = auditToRows(s.name, a, scores);
-  downloadXlsx('BSA', rows, [26, 55, 20, 30, 30], `BSA_${s.name.replace(/\s+/g,'_')}_${a.fecha}.xlsx`);
+  toast('Generando Excel...');
+  const { rows, images } = await auditToRows(s.name, a, scores);
+  await downloadXlsx('BSA', rows, [26, 55, 20, 30, 22], `BSA_${s.name.replace(/\s+/g,'_')}_${a.fecha}.xlsx`, images);
   toast('Descargando Excel...');
 }
 

@@ -96,14 +96,16 @@ function colLetter(n) {
 // ---- Hoja: rows = [ [ {v, s}, ... ], ... ]  s = indice de estilo (ver STYLE_* abajo) ----
 const STYLE_DEFAULT = 0, STYLE_TITLE = 1, STYLE_SUBTOTAL = 2, STYLE_OK = 3, STYLE_BAD = 4, STYLE_HEAD = 5;
 
-function buildSheetXml(rows, colWidths) {
+function buildSheetXml(rows, colWidths, rowHeights, hasDrawing) {
   let cols = '<cols>';
   (colWidths || []).forEach((w, i) => { cols += `<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`; });
   cols += '</cols>';
 
   let sheetData = '<sheetData>';
   rows.forEach((row, ri) => {
-    sheetData += `<row r="${ri+1}">`;
+    const h = rowHeights && rowHeights[ri];
+    const attrs = h ? ` ht="${h}" customHeight="1"` : '';
+    sheetData += `<row r="${ri+1}"${attrs}>`;
     row.forEach((cell, ci) => {
       if (cell == null) return;
       const ref = colLetter(ci+1) + (ri+1);
@@ -120,11 +122,72 @@ function buildSheetXml(rows, colWidths) {
   sheetData += '</sheetData>';
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 ${cols}
 ${sheetData}
+${hasDrawing ? '<drawing r:id="rId1"/>' : ''}
 </worksheet>`;
 }
+
+// ---- Imagenes incrustadas (fotos de hallazgos) ----
+function dataUrlToBytes(dataUrl) {
+  const base64 = dataUrl.split(',')[1] || '';
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function loadImageDims(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth || 120, h: img.naturalHeight || 120 });
+    img.onerror = () => resolve({ w: 120, h: 120 });
+    img.src = dataUrl;
+  });
+}
+
+function fitSize(w, h, maxDim) {
+  if (!w || !h) return { w: maxDim, h: maxDim };
+  if (w >= h) return { w: maxDim, h: Math.round(h * maxDim / w) };
+  return { w: Math.round(w * maxDim / h), h: maxDim };
+}
+
+function buildDrawingXml(images) {
+  const anchors = images.map((img, i) => {
+    const cx = Math.round(img.dispW * 9525);
+    const cy = Math.round(img.dispH * 9525);
+    return `<xdr:oneCellAnchor>
+<xdr:from><xdr:col>${img.col}</xdr:col><xdr:colOff>19050</xdr:colOff><xdr:row>${img.row}</xdr:row><xdr:rowOff>19050</xdr:rowOff></xdr:from>
+<xdr:ext cx="${cx}" cy="${cy}"/>
+<xdr:pic>
+<xdr:nvPicPr><xdr:cNvPr id="${i + 2}" name="Foto${i + 1}"/><xdr:cNvPicPr/></xdr:nvPicPr>
+<xdr:blipFill><a:blip r:embed="rId${i + 1}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
+<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+</xdr:pic>
+<xdr:clientData/>
+</xdr:oneCellAnchor>`;
+  }).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+${anchors}
+</xdr:wsDr>`;
+}
+
+function buildDrawingRelsXml(images) {
+  const rels = images.map((img, i) =>
+    `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${i + 1}.jpeg"/>`
+  ).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${rels}
+</Relationships>`;
+}
+
+const SHEET_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>`;
 
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -157,14 +220,18 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </cellXfs>
 </styleSheet>`;
 
-const CONTENT_TYPES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+function buildContentTypesXml(hasImages) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
+${hasImages ? '<Default Extension="jpeg" ContentType="image/jpeg"/>' : ''}
 <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
 <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+${hasImages ? '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>' : ''}
 </Types>`;
+}
 
 const RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -183,21 +250,42 @@ const WORKBOOK_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`;
 
-function buildXlsxBytes(sheetName, rows, colWidths) {
+// images: [{ row, col, dataUrl }] (0-based row/col) — opcional
+async function buildXlsxBytes(sheetName, rows, colWidths, images) {
   const enc = new TextEncoder();
+  const hasImages = !!(images && images.length);
+  const rowHeights = {};
+  const sizedImages = [];
+  if (hasImages) {
+    for (const img of images) {
+      const dims = await loadImageDims(img.dataUrl);
+      const disp = fitSize(dims.w, dims.h, 90);
+      sizedImages.push({ ...img, dispW: disp.w, dispH: disp.h });
+      rowHeights[img.row] = Math.max(rowHeights[img.row] || 0, disp.h * 0.75 + 6);
+    }
+  }
+
   const files = [
-    { name: '[Content_Types].xml', content: enc.encode(CONTENT_TYPES_XML) },
+    { name: '[Content_Types].xml', content: enc.encode(buildContentTypesXml(hasImages)) },
     { name: '_rels/.rels', content: enc.encode(RELS_XML) },
     { name: 'xl/workbook.xml', content: enc.encode(workbookXml(sheetName)) },
     { name: 'xl/_rels/workbook.xml.rels', content: enc.encode(WORKBOOK_RELS_XML) },
     { name: 'xl/styles.xml', content: enc.encode(STYLES_XML) },
-    { name: 'xl/worksheets/sheet1.xml', content: enc.encode(buildSheetXml(rows, colWidths)) },
+    { name: 'xl/worksheets/sheet1.xml', content: enc.encode(buildSheetXml(rows, colWidths, rowHeights, hasImages)) },
   ];
+  if (hasImages) {
+    files.push({ name: 'xl/worksheets/_rels/sheet1.xml.rels', content: enc.encode(SHEET_RELS_XML) });
+    files.push({ name: 'xl/drawings/drawing1.xml', content: enc.encode(buildDrawingXml(sizedImages)) });
+    files.push({ name: 'xl/drawings/_rels/drawing1.xml.rels', content: enc.encode(buildDrawingRelsXml(sizedImages)) });
+    sizedImages.forEach((img, i) => {
+      files.push({ name: `xl/media/image${i + 1}.jpeg`, content: dataUrlToBytes(img.dataUrl) });
+    });
+  }
   return buildZip(files);
 }
 
-function downloadXlsx(sheetName, rows, colWidths, filename) {
-  const bytes = buildXlsxBytes(sheetName, rows, colWidths);
+async function downloadXlsx(sheetName, rows, colWidths, filename, images) {
+  const bytes = await buildXlsxBytes(sheetName, rows, colWidths, images);
   const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
